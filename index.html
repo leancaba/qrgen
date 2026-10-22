@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Generador de QR</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<style>
+  /* Una sola columna: campo arriba, QR grande al centro, botones abajo */
+  :root {
+    --bg: #eef0ec;
+    --surface: #ffffff;
+    --ink: #121512;
+    --muted: #5d655d;
+    --line: #d3d8d1;
+    --accent: #1f6b4a;
+    --accent-ink: #ffffff;
+    --error: #b3261e;
+    --display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+    --body: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121512; --surface: #1b1f1b; --ink: #eef0ec; --muted: #9aa39a;
+      --line: #2e352e; --accent: #4fbf8b; --accent-ink: #0d1a13; --error: #f2b8b5;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink); font: 16px/1.5 var(--body);
+    min-height: 100vh; display: grid; place-items: start center;
+    padding-block: 48px; padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  main { width: 100%; max-width: 520px; display: flex; flex-direction: column; gap: 24px; }
+  h1 { font-family: var(--display); font-weight: 800; font-size: clamp(2rem, 7vw, 2.75rem); line-height: 1; margin: 0; letter-spacing: -0.02em; text-wrap: balance; }
+  .sub { margin: 8px 0 0; color: var(--muted); }
+  label { display: block; font-size: 0.8rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 8px; }
+  input {
+    width: 100%; font: 1rem var(--mono); color: var(--ink); background: var(--surface);
+    border: 1.5px solid var(--line); border-radius: 10px; padding: 14px 16px; outline: none;
+  }
+  input:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+  .error { color: var(--error); font-size: 0.9rem; margin: 8px 0 0; min-height: 1.35em; }
+  .frame {
+    background: #ffffff; border: 1.5px solid var(--line); border-radius: 16px;
+    padding: 20px; aspect-ratio: 1; max-width: 100%; display: grid; place-items: center;
+  }
+  .frame canvas { width: 100%; height: auto; image-rendering: pixelated; display: block; }
+  .empty { color: #8a918a; font-size: 0.95rem; text-align: center; }
+  .meta { font: 0.8rem var(--mono); color: var(--muted); display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  button {
+    font: 600 1rem var(--display); border-radius: 10px; padding: 14px 16px; cursor: pointer;
+    border: 1.5px solid var(--accent); background: var(--accent); color: var(--accent-ink);
+  }
+  button.alt { background: transparent; color: var(--accent); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+  @media (max-width: 380px) { .actions { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Generador de QR</h1>
+    <p class="sub">Pegá un link y descargá el QR en 1200 × 1200 px. Es un QR estático: no vence nunca.</p>
+  </header>
+
+  <div>
+    <label for="url">Link</label>
+    <input id="url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://tusitio.com">
+    <p class="error" id="error"></p>
+  </div>
+
+  <div class="frame" id="frame"><p class="empty" id="empty">El QR aparece acá</p></div>
+
+  <div class="meta"><span>1200 × 1200 px</span><span id="info"></span></div>
+
+  <div class="actions">
+    <button id="png" disabled>Descargar PNG</button>
+    <button id="jpg" class="alt" disabled>Descargar JPG</button>
+  </div>
+</main>
+
+<script>
+  const SIZE = 1200;
+  const input = document.getElementById('url');
+  const frame = document.getElementById('frame');
+  const empty = document.getElementById('empty');
+  const errorEl = document.getElementById('error');
+  const info = document.getElementById('info');
+  const btnPng = document.getElementById('png');
+  const btnJpg = document.getElementById('jpg');
+  let canvas = null;
+  let currentText = '';
+
+  function normalize(value) {
+    const v = value.trim();
+    if (!v) return '';
+    if (/^[a-z][a-z0-9+.-]*:/i.test(v)) return v;
+    return 'https://' + v;
+  }
+
+  function draw(text) {
+    const qr = qrcode(0, 'M');          // versión automática, corrección media
+    qr.addData(text, 'Byte');
+    qr.make();
+    const n = qr.getModuleCount();
+    const quiet = 4;                    // margen blanco estándar
+    const total = n + quiet * 2;
+    const c = document.createElement('canvas');
+    c.width = SIZE; c.height = SIZE;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, SIZE, SIZE);
+    ctx.fillStyle = '#000000';
+    for (let r = 0; r < n; r++) {
+      for (let col = 0; col < n; col++) {
+        if (!qr.isDark(r, col)) continue;
+        const x0 = Math.round((col + quiet) * SIZE / total);
+        const y0 = Math.round((r + quiet) * SIZE / total);
+        const x1 = Math.round((col + quiet + 1) * SIZE / total);
+        const y1 = Math.round((r + quiet + 1) * SIZE / total);
+        ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+      }
+    }
+    return { canvas: c, modules: n };
+  }
+
+  function update() {
+    const text = normalize(input.value);
+    errorEl.textContent = '';
+    if (!text) {
+      reset();
+      return;
+    }
+    try {
+      const out = draw(text);
+      canvas = out.canvas;
+      currentText = text;
+      frame.replaceChildren(canvas);
+      info.textContent = out.modules + ' × ' + out.modules + ' módulos';
+      btnPng.disabled = false; btnJpg.disabled = false;
+    } catch (e) {
+      reset();
+      errorEl.textContent = 'El link es demasiado largo para un QR. Probá con uno más corto.';
+    }
+  }
+
+  function reset() {
+    canvas = null; currentText = '';
+    frame.replaceChildren(empty);
+    info.textContent = '';
+    btnPng.disabled = true; btnJpg.disabled = true;
+  }
+
+  function fileName(ext) {
+    let base = currentText.replace(/^[a-z]+:\/\//i, '').replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').slice(0, 40);
+    return 'qr-' + (base || 'link') + '.' + ext;
+  }
+
+  function download(type, ext) {
+    if (!canvas) return;
+    canvas.toBlob(blob => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = fileName(ext);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }, type, 0.95);
+  }
+
+  let t;
+  input.addEventListener('input', () => { clearTimeout(t); t = setTimeout(update, 150); });
+  btnPng.addEventListener('click', () => download('image/png', 'png'));
+  btnJpg.addEventListener('click', () => download('image/jpeg', 'jpg'));
+</script>
+</body>
+</html>
